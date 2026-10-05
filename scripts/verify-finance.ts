@@ -1,0 +1,11 @@
+import {fetchBatch,universe,tradingDays} from '../lib/finance/provider.ts';
+import {initialStrategy} from '../lib/strategy/schema.ts';
+import {writeFile,mkdir} from 'node:fs/promises';
+const started=Date.now();
+const pool=await universe('csi300');
+console.log(JSON.stringify({step:'universe',count:pool.stocks.length,observedAt:pool.timestamp,requestId:pool.requestId}));
+const days=await tradingDays();console.log(JSON.stringify({step:'calendar',count:days.length,end:new Date(days.at(-1)!).toISOString()}));
+const codes=['600519.SH','600036.SH','300750.SZ'];
+const rows=await fetchBatch(codes,['pe_ttm','pb_mrq','net_profit_yoy','revenue_yoy','volatility_60d'],initialStrategy().report);
+const summary=rows.map(s=>({code:s.code,name:s.name,metrics:Object.fromEntries(Object.entries(s.metrics).map(([k,v])=>[k,{value:v.value,quality:v.quality,rawValue:Array.isArray(v.rawValue)?`${v.rawValue.length} bars`:v.rawValue,observedAt:v.observedAt,requestId:v.requestId,reason:v.reason,windowStart:v.windowStart,windowEnd:v.windowEnd,sampleCount:v.sampleCount}]))}));
+await mkdir('work',{recursive:true});await writeFile('work/finance-verification.json',JSON.stringify({startedAt:new Date(started).toISOString(),durationMs:Date.now()-started,universe:{count:pool.stocks.length,observedAt:pool.timestamp,requestId:pool.requestId},rows:summary},null,2));console.log(JSON.stringify({step:'metrics',durationMs:Date.now()-started,rows:summary}));

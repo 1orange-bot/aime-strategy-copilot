@@ -1,0 +1,35 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {initialStrategy,StrategySchema,formatValue} from '../lib/strategy/schema.ts';
+import type {Condition,Indicator,Evidence} from '../lib/strategy/schema.ts';
+import {screen,matches,conflicts,compareStrategies,conditionImpact} from '../lib/strategy/engine.ts';
+import {mockSnapshot} from '../lib/finance/mock.ts';
+import {numberOrNull,normalizeMetric,volatility} from '../lib/finance/normalize.ts';
+import {blockedIntent} from '../lib/strategy/guardrails.ts';
+const s=()=>({...initialStrategy(),universe:'sample' as const});
+const c=(operator:Condition['operator'],value:Condition['value']):Condition=>({id:'pe',concept:'测试估值',field:'pe_ttm',operator,value,assumption:false});
+const evidence=(field:Indicator,rawValue:unknown):Omit<Evidence,'value'|'quality'>=>({id:'test',field,rawField:field,rawValue,unit:'%',source:'test fixture',endpoint:'fixture',observedAt:null,fetchedAt:'2026-09-30T07:00:00Z',requestId:null});
+test('strict DSL refuses extra keys, NaN, reversed intervals and duplicate identifiers',()=>{
+ assert.equal(StrategySchema.safeParse({...s(),stocks:['invented']}).success,false);
+ assert.equal(StrategySchema.safeParse({...s(),conditions:[c('<',NaN)]}).success,false);
+ assert.equal(StrategySchema.safeParse({...s(),conditions:[c('between',[30,10])]}).success,false);
+ assert.equal(StrategySchema.safeParse({...s(),conditions:[c('<',30),c('>',10)]}).success,false);
+ assert.equal(StrategySchema.safeParse({...s(),conditions:[c('<',[10,30])]}).success,false);
+});
+test('open and closed numeric boundaries are exact',()=>{assert.equal(matches(30,c('<',30)),false);assert.equal(matches(30,c('<=',30)),true);assert.equal(matches(30,c('>=',30)),true);assert.equal(matches(30,c('>',30)),false);assert.equal(matches(30,c('between',[10,30])),true);assert.equal(matches(10,c('between',[10,30])),true);});
+test('intersect conditions with openness and positive PE domain',()=>{
+ assert.equal(conflicts({...s(),conditions:[c('<',10),{...c('>=',10),id:'pe2'}]}).length,1);
+ assert.equal(conflicts({...s(),conditions:[c('<=',10),{...c('>=',10),id:'pe2'}]}).length,0);
+ assert.equal(conflicts({...s(),conditions:[c('<=',0)]}).length,1);
+ assert.equal(conflicts({...s(),conditions:[c('between',[-5,5])]}).length,0);
+});
+test('no missing, boolean or object becomes zero',()=>{for(const v of [null,undefined,'',true,false,'N/A','--',Infinity,{},[],[1]])assert.equal(numberOrNull(v),null);assert.equal(numberOrNull('0'),0);assert.equal(numberOrNull(' 18.2 '),18.2);});
+test('percent conversion happens exactly once, display reverses only for presentation',()=>{const e=normalizeMetric(evidence('net_profit_yoy','18.2'),true);assert.equal(e.value,.182);assert.equal(formatValue('net_profit_yoy',e.value),'18.2%');assert.equal(normalizeMetric(evidence('net_profit_yoy',null),true).value,null);});
+test('negative and zero PE/PB are invalid for conventional valuation',()=>{for(const field of ['pe_ttm','pb_mrq'] as const){assert.equal(normalizeMetric(evidence(field,-3)).quality,'invalid');assert.equal(normalizeMetric(evidence(field,0)).quality,'invalid');}});
+test('AND prioritizes FAIL but retains UNKNOWN evidence',()=>{const snap=mockSnapshot(s().report);snap.stocks=snap.stocks.slice(0,1);snap.universeCount=1;snap.stocks[0].metrics.pe_ttm!.value=40;snap.stocks[0].metrics.net_profit_yoy!.quality='missing';snap.stocks[0].metrics.net_profit_yoy!.value=null;const [r]=screen(s(),snap);assert.equal(r.status,'fail');assert.equal(r.checks.find(x=>x.condition.field==='net_profit_yoy')!.status,'unknown');});
+test('all PASS only selects; UNKNOWN without FAIL never selects',()=>{const snap=mockSnapshot(s().report);const row=snap.stocks[3];snap.stocks=[row];snap.universeCount=1;assert.equal(screen(s(),snap)[0].status,'pass');row.metrics.net_profit_yoy!.quality='missing';assert.equal(screen(s(),snap)[0].status,'unknown');});
+test('unresolved requirements and mismatched report/pool stop execution',()=>{const snap=mockSnapshot(s().report);assert.throws(()=>screen({...s(),unresolved:['不支持的概念']},snap));assert.throws(()=>screen({...s(),report:'2025-4'},snap));assert.throws(()=>screen({...s(),universe:'csi300'},snap));});
+test('sensitivity uses one snapshot and reports additions/removals, independent failures overlap',()=>{const snap=mockSnapshot(s().report);const before=s(),after={...before,conditions:before.conditions.map(x=>x.field==='pe_ttm'?{...x,value:22}:x)};const saved=JSON.stringify(snap);const delta=compareStrategies(before,after,snap);assert.equal(delta.snapshotId,snap.id);assert.ok(delta.removed.length>0);assert.equal(delta.added.length,0);assert.equal(JSON.stringify(snap),saved);const impact=conditionImpact(before,snap);assert.equal(impact.length,3);assert.ok(impact.every(x=>x.addedIfRemoved!>=0));});
+test('volatility uses 60 adjacent returns, sample variance and annualization',()=>{const dates=Array.from({length:61},(_,i)=>1700000000000+i*86400000);let price=100;const bars=dates.map((date_ms,i)=>({date_ms,close_price:i?price*=i%2?1.01:.99:price}));const result=volatility(bars,dates);assert.ok(Math.abs(result.value!-Math.sqrt((60*.01**2)/59)*Math.sqrt(252))<1e-10);assert.equal(result.sampleCount,60);assert.equal(volatility(bars.slice(1),dates).value,null);assert.equal(volatility([...bars.slice(1),bars[60]],dates).value,null);assert.equal(volatility(bars,dates.map(d=>d+1)).value,null);bars[3].close_price=0;assert.equal(volatility(bars,dates).value,null);});
+test('guardrails block guarantees and direct trading requests without blocking historical research',()=>{for(const q of ['明天必涨的股票','稳赚10%','买哪个股票','推荐哪只','我应该买入吗','should I buy this stock','仓位建议'])assert.ok(blockedIntent(q),q);for(const q of ['净利润同比大于10%，PE小于30','历史走势稳定的公司','公司经营改善','比较估值指标'])assert.equal(blockedIntent(q),null,q);});
+test('mock mode has anonymous synthetic companies and explicit provenance',()=>{const snap=mockSnapshot(s().report);assert.equal(snap.mode,'mock');assert.ok(snap.stocks.every(x=>x.code.startsWith('DEMO-')));assert.ok(snap.warnings[0].includes('构造'));assert.ok(snap.stocks.every(x=>Object.values(x.metrics).every(m=>m.source==='构造测试数据')));});

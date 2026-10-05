@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {POST} from '../app/api/intent/route.ts';
+import {initialStrategy} from '../lib/strategy/schema.ts';
+const original=globalThis.fetch;process.env.DEEPSEEK_API_KEY='fake-unit-test-key-not-valid';
+const request=(query:string,id:string)=>new Request('https://test.local/api/intent',{method:'POST',headers:{'Content-Type':'application/json','cf-connecting-ip':id},body:JSON.stringify({query,operation:'create',strategy:initialStrategy()})});
+const model=(content:string)=>Response.json({choices:[{finish_reason:'stop',message:{content}}]});
+test('invalid model JSON repairs once, then refuses instead of inventing a strategy',async()=>{let n=0;try{globalThis.fetch=async()=>{n++;return model('not-json');};const r=await POST(request('PE低于30倍','test-invalid'));assert.equal(r.status,502);assert.equal(n,2);assert.equal((await r.json() as {code:string}).code,'AI_INVALID_OUTPUT');}finally{globalThis.fetch=original;}});
+test('model repair returns strictly validated strategy with exact original user text',async()=>{let n=0;try{globalThis.fetch=async()=>model(++n===1?'{}':JSON.stringify({...initialStrategy(),originalQuery:'model text'}));const r=await POST(request('经营改善、估值合理、走势稳定','test-repair'));assert.equal(r.status,200);const v=await r.json() as {strategy:{originalQuery:string};attempts:number};assert.equal(v.attempts,2);assert.equal(v.strategy.originalQuery,'经营改善、估值合理、走势稳定');}finally{globalThis.fetch=original;}});
+test('direct guarantee is blocked before model is called and HTTP failures are explicit',async()=>{let n=0;try{globalThis.fetch=async()=>{n++;return new Response('',{status:401});};assert.equal((await POST(request('明天必涨稳赚','test-boundary'))).status,422);assert.equal(n,0);assert.equal((await POST(request('PE低于30倍','test-http-error'))).status,502);assert.equal(n,1);}finally{globalThis.fetch=original;}});

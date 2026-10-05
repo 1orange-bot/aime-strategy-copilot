@@ -1,0 +1,1 @@
+for(const report of ['2026-2','2025-4']){const r=await fetch('https://fuyao.aicubes.cn/api/a-share/financials/indicators?thscode=600519.SH&report='+report,{headers:{'X-api-key':process.env.FUYAO_API_KEY},signal:AbortSignal.timeout(20000)});console.log(JSON.stringify({report,status:r.status,data:await r.json()}));}
