@@ -47,3 +47,6 @@ next-env.d.ts
 /.codex/
 /outputs/
 /work/
+# User-provided local audit input; preserve locally without publishing it.
+/AIME_Strategy_Copilot_提交前审查报告.md
+/docs/AIME_Strategy_Copilot_提交前审查报告.md

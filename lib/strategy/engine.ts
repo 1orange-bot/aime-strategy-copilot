@@ -39,12 +39,21 @@ export function screen(input:Strategy,snapshot:Snapshot):StockResult[]{
   return {...stock,status,checks};
  });
 }
+export function missingSnapshotFields(strategy:Strategy,snapshot:Snapshot){
+ return [...new Set(strategy.conditions.map(c=>c.field))].filter(field=>snapshot.stocks.some(stock=>!stock.metrics[field]));
+}
+function requireSnapshotFields(strategy:Strategy,snapshot:Snapshot){
+ const fields=missingSnapshotFields(strategy,snapshot);
+ if(fields.length)throw new Error(`当前快照未获取 ${fields.map(f=>registry[f].name).join('、')}，请重新获取数据后生成新结论。`);
+}
 export function compareStrategies(before:Strategy,after:Strategy,snapshot:Snapshot){
+ requireSnapshotFields(before,snapshot);requireSnapshotFields(after,snapshot);
  const a=screen(before,snapshot).filter(s=>s.status==='pass').map(s=>s.code);
- const b=screen(after,snapshot).filter(s=>s.status==='pass').map(s=>s.code);
- return {snapshotId:snapshot.id,before:a.length,after:b.length,added:b.filter(x=>!a.includes(x)),removed:a.filter(x=>!b.includes(x)),retained:b.filter(x=>a.includes(x))};
+ const afterRows=screen(after,snapshot),b=afterRows.filter(s=>s.status==='pass').map(s=>s.code);
+ return {snapshotId:snapshot.id,before:a.length,after:b.length,added:b.filter(x=>!a.includes(x)),removed:afterRows.filter(x=>x.status==='fail'&&a.includes(x.code)).map(x=>x.code),pending:afterRows.filter(x=>x.status==='unknown'&&a.includes(x.code)).map(x=>x.code),retained:b.filter(x=>a.includes(x))};
 }
 export function conditionImpact(strategy:Strategy,snapshot:Snapshot){
+ requireSnapshotFields(strategy,snapshot);
  const results=screen(strategy,snapshot);const current=results.filter(x=>x.status==='pass').length;
  return strategy.conditions.map(c=>({id:c.id,failed:results.filter(x=>x.checks.find(k=>k.condition.id===c.id)?.status==='fail').length,unknown:results.filter(x=>x.checks.find(k=>k.condition.id===c.id)?.status==='unknown').length,addedIfRemoved:strategy.conditions.length>1?screen({...strategy,conditions:strategy.conditions.filter(x=>x.id!==c.id)},snapshot).filter(x=>x.status==='pass').length-current:null}));
 }

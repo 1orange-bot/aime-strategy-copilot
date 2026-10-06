@@ -55,7 +55,14 @@ export const sampleStocks=[
  {code:'601899.SH',name:'紫金矿业'},{code:'600030.SH',name:'中信证券'},
  {code:'000651.SZ',name:'格力电器'},{code:'600276.SH',name:'恒瑞医药'},
 ];
-export function defaultReport(now=new Date()){const y=now.getUTCFullYear();const m=now.getUTCMonth()+1;return m>=11?`${y}-3`:m>=9?`${y}-2`:m>=5?`${y}-1`:`${y-1}-3`;}
+// Use Beijing dates and completed standard disclosure windows, not a promise
+// that every company has published valid data. Individual missing data stays UNKNOWN.
+export function availableReports(now=new Date()){
+ const beijing=new Date(now.getTime()+8*60*60*1000),y=beijing.getUTCFullYear(),m=beijing.getUTCMonth()+1;
+ const latest=m>=11?y*4+3:m>=9?y*4+2:m>=5?y*4+1:(y-1)*4+3;
+ return Array.from({length:4},(_,i)=>y-i).flatMap(year=>[4,3,2,1].filter(q=>year*4+q<=latest).map(q=>`${year}-${q}`));
+}
+export function defaultReport(now=new Date()){return availableReports(now)[0];}
 export function initialStrategy():Strategy{return {version:1,name:'经营改善与历史稳定性',originalQuery:'',universe:'csi300',report:defaultReport(),conditions:[
  {id:'profit',concept:'经营改善的代理指标',field:'net_profit_yoy',operator:'>',value:0,assumption:true},
  {id:'pe',concept:'估值合理的代理指标',field:'pe_ttm',operator:'<',value:30,assumption:true},
