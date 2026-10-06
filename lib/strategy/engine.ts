@@ -57,3 +57,11 @@ export function conditionImpact(strategy:Strategy,snapshot:Snapshot){
  const results=screen(strategy,snapshot);const current=results.filter(x=>x.status==='pass').length;
  return strategy.conditions.map(c=>({id:c.id,failed:results.filter(x=>x.checks.find(k=>k.condition.id===c.id)?.status==='fail').length,unknown:results.filter(x=>x.checks.find(k=>k.condition.id===c.id)?.status==='unknown').length,addedIfRemoved:strategy.conditions.length>1?screen({...strategy,conditions:strategy.conditions.filter(x=>x.id!==c.id)},snapshot).filter(x=>x.status==='pass').length-current:null}));
 }
+
+export function compareStocks(strategy:Strategy,snapshot:Snapshot,codes:string[]){
+ if(codes.length<2||codes.length>3||new Set(codes).size!==codes.length)throw new Error('请选择2至3只不同股票进行比较。');
+ requireSnapshotFields(strategy,snapshot);
+ const results=screen(strategy,snapshot),rows=codes.map(code=>results.find(stock=>stock.code===code));
+ if(rows.some(row=>!row))throw new Error('比较股票不在当前快照，请重新选择。');
+ return {snapshotId:snapshot.id,fields:Object.keys(registry) as Indicator[],rows:rows as StockResult[]};
+}
